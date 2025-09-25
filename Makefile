@@ -1,6 +1,16 @@
 # H3Speed Makefile
 
-.PHONY: all build clean server client test
+.PHONY: all build clean server client test \
+	build-static server-static client-static help fmt deps bin
+
+# Configurable variables (can be overridden at invocation time)
+# Example: make build-static GOOS=linux GOARCH=arm64
+GOOS ?=
+GOARCH ?=
+
+# Static build flags
+STATIC_TAGS ?= osusergo,netgo
+STATIC_LDFLAGS ?= -s -w -extldflags "-static"
 
 # Build both server and client
 all: build
@@ -9,14 +19,29 @@ all: build
 build: server client
 
 # Build the server
-server:
+server: bin
 	@echo "Building server..."
 	@go build -o bin/h3speed-server ./cmd/server
 
 # Build the client
-client:
+client: bin
 	@echo "Building client..."
 	@go build -o bin/h3speed-client ./cmd/client
+
+# Static build (fully static, CGO disabled)
+build-static: server-static client-static
+
+server-static: bin
+	@echo "Building static server..."
+	@CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) \
+		go build -trimpath -tags '$(STATIC_TAGS)' -ldflags '$(STATIC_LDFLAGS)' \
+		-o bin/h3speed-server-static ./cmd/server
+
+client-static: bin
+	@echo "Building static client..."
+	@CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) \
+		go build -trimpath -tags '$(STATIC_TAGS)' -ldflags '$(STATIC_LDFLAGS)' \
+		-o bin/h3speed-client-static ./cmd/client
 
 # Run the server
 run-server: server
@@ -65,6 +90,9 @@ help:
 	@echo "  build         - Build both server and client"
 	@echo "  server        - Build server only"
 	@echo "  client        - Build client only"
+	@echo "  build-static  - Build statically linked server and client (CGO disabled)"
+	@echo "  server-static - Build statically linked server only (outputs bin/h3speed-server-static)"
+	@echo "  client-static - Build statically linked client only (outputs bin/h3speed-client-static)"
 	@echo "  run-server    - Build and run server"
 	@echo "  run-client-download - Run client in download mode"
 	@echo "  run-client-upload   - Run client in upload mode"

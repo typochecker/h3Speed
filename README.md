@@ -5,7 +5,7 @@ A comprehensive HTTP3 speed testing tool that can test upload and download perfo
 ## Features
 
 - **Multi-protocol support**: Unix domain socket, HTTP, and HTTP3
-- **Real-time speed monitoring**: Updates every second during tests  
+- **Real-time speed monitoring**: Updates every second during tests
 - **Configurable testing**: Support for multiple connections and streams per connection
 - **Random data generation**: Generates random data for upload/download tests
 - **Command-line interface**: Easy to use with flexible parameters
@@ -28,6 +28,13 @@ make build
 # Build individually
 make server  # builds bin/h3speed-server
 make client  # builds bin/h3speed-client
+
+# Static build (fully static, CGO disabled)
+make build-static           # builds bin/h3speed-*-static for current platform
+
+# Cross-compile static binaries (examples)
+GOOS=linux GOARCH=amd64 make build-static
+GOOS=linux GOARCH=arm64 make build-static
 ```
 
 ## Usage
