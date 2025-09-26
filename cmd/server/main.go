@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -31,10 +32,25 @@ type Server struct {
 	http3Server  *http3.Server
 	unixServer   *http.Server
 	unixListener net.Listener
+
+	// Configurable addresses/paths
+	httpAddr     string
+	http3Addr    string
+	unixSockPath string
 }
 
 func main() {
-	server := &Server{}
+	// Flags for configurable ports/paths
+	httpAddr := flag.String("http", ":8080", "HTTP listen address (host:port)")
+	h3Addr := flag.String("h3", ":8443", "HTTP/3 listen address (host:port)")
+	unixSock := flag.String("unix", "/tmp/h3speed.sock", "Unix domain socket path")
+	flag.Parse()
+
+	server := &Server{
+		httpAddr:     *httpAddr,
+		http3Addr:    *h3Addr,
+		unixSockPath: *unixSock,
+	}
 
 	// Setup signal handling
 	ctx, cancel := context.WithCancel(context.Background())
@@ -70,16 +86,16 @@ func (s *Server) startServers(ctx context.Context) {
 	go s.startHTTP3Server(ctx, mux)
 
 	log.Println("All servers started successfully!")
-	log.Println("Unix socket: /tmp/h3speed.sock")
-	log.Println("HTTP: :8080")
-	log.Println("HTTP3: :8443")
+	log.Printf("Unix socket: %s", s.unixSockPath)
+	log.Printf("HTTP: %s", s.httpAddr)
+	log.Printf("HTTP3: %s", s.http3Addr)
 
 	<-ctx.Done()
 	s.shutdown()
 }
 
 func (s *Server) startUnixServer(ctx context.Context, mux *http.ServeMux) {
-	sockPath := "/tmp/h3speed.sock"
+	sockPath := s.unixSockPath
 
 	// Remove existing socket file
 	os.Remove(sockPath)
@@ -101,11 +117,11 @@ func (s *Server) startUnixServer(ctx context.Context, mux *http.ServeMux) {
 
 func (s *Server) startHTTPServer(ctx context.Context, mux *http.ServeMux) {
 	s.httpServer = &http.Server{
-		Addr:    ":8080",
+		Addr:    s.httpAddr,
 		Handler: mux,
 	}
 
-	log.Println("HTTP server listening on :8080")
+	log.Printf("HTTP server listening on %s", s.httpAddr)
 
 	if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Printf("HTTP server error: %v", err)
@@ -120,14 +136,14 @@ func (s *Server) startHTTP3Server(ctx context.Context, mux *http.ServeMux) {
 	}
 
 	s.http3Server = &http3.Server{
-		Addr:    ":8443",
+		Addr:    s.http3Addr,
 		Handler: mux,
 		TLSConfig: &tls.Config{
 			Certificates: []tls.Certificate{cert},
 		},
 	}
 
-	log.Println("HTTP3 server listening on :8443")
+	log.Printf("HTTP3 server listening on %s", s.http3Addr)
 
 	if err := s.http3Server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Printf("HTTP3 server error: %v", err)
