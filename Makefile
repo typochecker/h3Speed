@@ -1,7 +1,8 @@
 # H3Speed Makefile
 
 .PHONY: all build clean server client test \
-	build-static server-static client-static help fmt deps bin
+	build-static server-static client-static help fmt deps bin \
+	windows windows-static
 
 # Configurable variables (can be overridden at invocation time)
 # Example: make build-static GOOS=linux GOARCH=arm64
@@ -12,6 +13,12 @@ GOARCH ?=
 STATIC_TAGS ?= osusergo,netgo
 STATIC_LDFLAGS ?= -s -w -extldflags "-static"
 
+# Executable suffix for Windows
+OS_EXT :=
+ifeq ($(GOOS),windows)
+OS_EXT := .exe
+endif
+
 # Build both server and client
 all: build
 
@@ -21,12 +28,12 @@ build: server client
 # Build the server
 server: bin
 	@echo "Building server..."
-	@go build -o bin/h3speed-server ./cmd/server
+	@go build -o bin/h3speed-server$(OS_EXT) ./cmd/server
 
 # Build the client
 client: bin
 	@echo "Building client..."
-	@go build -o bin/h3speed-client ./cmd/client
+	@go build -o bin/h3speed-client$(OS_EXT) ./cmd/client
 
 # Static build (fully static, CGO disabled)
 build-static: server-static client-static
@@ -35,13 +42,20 @@ server-static: bin
 	@echo "Building static server..."
 	@CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) \
 		go build -trimpath -tags '$(STATIC_TAGS)' -ldflags '$(STATIC_LDFLAGS)' \
-		-o bin/h3speed-server-static ./cmd/server
+		-o bin/h3speed-server-static$(OS_EXT) ./cmd/server
 
 client-static: bin
 	@echo "Building static client..."
 	@CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) \
 		go build -trimpath -tags '$(STATIC_TAGS)' -ldflags '$(STATIC_LDFLAGS)' \
-		-o bin/h3speed-client-static ./cmd/client
+		-o bin/h3speed-client-static$(OS_EXT) ./cmd/client
+
+# Convenience targets for Windows builds
+windows:
+	@$(MAKE) GOOS=windows GOARCH=amd64 build
+
+windows-static:
+	@$(MAKE) GOOS=windows GOARCH=amd64 build-static
 
 # Run the server
 run-server: server
@@ -93,6 +107,8 @@ help:
 	@echo "  build-static  - Build statically linked server and client (CGO disabled)"
 	@echo "  server-static - Build statically linked server only (outputs bin/h3speed-server-static)"
 	@echo "  client-static - Build statically linked client only (outputs bin/h3speed-client-static)"
+	@echo "  windows       - Cross-compile Windows (amd64) server and client (outputs .exe)"
+	@echo "  windows-static- Cross-compile Windows (amd64) static variants (outputs *-static.exe)"
 	@echo "  run-server    - Build and run server"
 	@echo "  run-client-download - Run client in download mode"
 	@echo "  run-client-upload   - Run client in upload mode"
