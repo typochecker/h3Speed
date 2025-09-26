@@ -107,6 +107,21 @@ func (s *Server) startUnixServer(ctx context.Context, mux *http.ServeMux) {
 
 	s.unixListener = listener
 	s.unixServer = &http.Server{Handler: mux}
+	s.unixServer.ConnState = func(c net.Conn, state http.ConnState) {
+		ra := c.RemoteAddr().String()
+		switch state {
+		case http.StateNew:
+			log.Printf("[UNIX] conn new from %s", ra)
+		case http.StateActive:
+			log.Printf("[UNIX] conn active %s", ra)
+		case http.StateIdle:
+			log.Printf("[UNIX] conn idle %s", ra)
+		case http.StateHijacked:
+			log.Printf("[UNIX] conn hijacked %s", ra)
+		case http.StateClosed:
+			log.Printf("[UNIX] conn closed %s", ra)
+		}
+	}
 
 	log.Printf("Unix socket server listening on %s", sockPath)
 
@@ -116,9 +131,21 @@ func (s *Server) startUnixServer(ctx context.Context, mux *http.ServeMux) {
 }
 
 func (s *Server) startHTTPServer(ctx context.Context, mux *http.ServeMux) {
-	s.httpServer = &http.Server{
-		Addr:    s.httpAddr,
-		Handler: mux,
+	s.httpServer = &http.Server{Addr: s.httpAddr, Handler: mux}
+	s.httpServer.ConnState = func(c net.Conn, state http.ConnState) {
+		ra := c.RemoteAddr().String()
+		switch state {
+		case http.StateNew:
+			log.Printf("[HTTP] conn new from %s", ra)
+		case http.StateActive:
+			log.Printf("[HTTP] conn active %s", ra)
+		case http.StateIdle:
+			log.Printf("[HTTP] conn idle %s", ra)
+		case http.StateHijacked:
+			log.Printf("[HTTP] conn hijacked %s", ra)
+		case http.StateClosed:
+			log.Printf("[HTTP] conn closed %s", ra)
+		}
 	}
 
 	log.Printf("HTTP server listening on %s", s.httpAddr)
@@ -151,11 +178,13 @@ func (s *Server) startHTTP3Server(ctx context.Context, mux *http.ServeMux) {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	log.Printf("[REQ] %s %s from=%s xff=%s proto=%s", r.Method, r.URL.Path, r.RemoteAddr, r.Header.Get("X-Forwarded-For"), r.Proto)
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, "OK")
 }
 
 func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
+	log.Printf("[REQ] %s %s from=%s xff=%s proto=%s", r.Method, r.URL.Path, r.RemoteAddr, r.Header.Get("X-Forwarded-For"), r.Proto)
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -183,6 +212,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
+	log.Printf("[REQ] %s %s from=%s xff=%s proto=%s", r.Method, r.URL.Path, r.RemoteAddr, r.Header.Get("X-Forwarded-For"), r.Proto)
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -204,6 +234,7 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		// Send data
 		if _, err := w.Write(buffer); err != nil {
 			// Client disconnected
+			log.Printf("[REQ] download writer error, likely client closed: %v", err)
 			return
 		}
 

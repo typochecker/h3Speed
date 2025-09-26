@@ -10,10 +10,16 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
+	quic "github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 )
 
@@ -23,6 +29,7 @@ type Config struct {
 	Duration    time.Duration
 	Connections int
 	Streams     int
+	H3Idle      time.Duration
 }
 
 type SpeedMonitor struct {
@@ -41,6 +48,7 @@ func main() {
 	flag.DurationVar(&config.Duration, "time", 30*time.Second, "Test duration")
 	flag.IntVar(&config.Connections, "connections", 1, "Number of connections")
 	flag.IntVar(&config.Streams, "streams", 1, "Number of streams per connection")
+	flag.DurationVar(&config.H3Idle, "h3-idle", 5*time.Second, "HTTP/3 QUIC max idle timeout")
 	flag.Parse()
 
 	if config.Mode != "upload" && config.Mode != "download" {
@@ -55,11 +63,55 @@ func main() {
 		lastTime:  time.Now(),
 	}
 
-	// Start speed monitoring
-	ctx, cancel := context.WithTimeout(context.Background(), config.Duration)
+	// Handle Ctrl+C (SIGINT) / SIGTERM (and SIGBREAK on Windows) to cancel gracefully
+	sigs := []os.Signal{os.Interrupt, syscall.SIGTERM}
+	if runtime.GOOS == "windows" {
+		// PowerShell/ConHost may deliver BREAK as well
+		sigs = append(sigs, syscall.SIGBREAK)
+	}
+	sigCtx, stop := signal.NotifyContext(context.Background(), sigs...)
+	defer stop()
+
+	// Start speed monitoring with time limit AND signal cancellation
+	ctx, cancel := context.WithTimeout(sigCtx, config.Duration)
 	defer cancel()
 
 	go monitor.displaySpeed(ctx)
+
+	// Build a shared HTTP client (reused by all connections)
+	var (
+		client      *http.Client
+		h3Transport *http3.Transport
+		h1Transport *http.Transport
+	)
+
+	if strings.HasPrefix(config.URL, "https://") {
+		// Use HTTP/3 transport
+		h3Transport = &http3.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			QUICConfig: &quic.Config{
+				MaxIdleTimeout: config.H3Idle,
+			},
+		}
+		client = &http.Client{Transport: h3Transport}
+	} else {
+		// Use standard HTTP/1.1 transport (and allow HTTPS without HTTP/3)
+		h1Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+		client = &http.Client{Transport: h1Transport}
+	}
+
+	// On signal cancellation, aggressively close transports to abort in-flight requests
+	go func() {
+		<-sigCtx.Done()
+		if h3Transport != nil {
+			_ = h3Transport.Close()
+		}
+		if h1Transport != nil {
+			h1Transport.CloseIdleConnections()
+		}
+	}()
 
 	// Start test workers
 	var wg sync.WaitGroup
@@ -68,11 +120,22 @@ func main() {
 		wg.Add(1)
 		go func(connID int) {
 			defer wg.Done()
-			runConnection(ctx, config, monitor, connID)
+			runConnection(ctx, config, client, monitor, connID)
 		}(i)
 	}
 
 	wg.Wait()
+
+	// Proactively close transports (especially HTTP/3) on exit
+	log.Println("Shutting down client: closing transports...")
+	if h3Transport != nil {
+		_ = h3Transport.Close()
+	}
+	if h1Transport != nil {
+		h1Transport.CloseIdleConnections()
+	}
+	// Give a tiny grace period to allow CONNECTION_CLOSE to be sent
+	time.Sleep(200 * time.Millisecond)
 
 	// Final statistics
 	monitor.printFinalStats()
@@ -131,30 +194,7 @@ func (sm *SpeedMonitor) printFinalStats() {
 	fmt.Printf("Average speed: %s/s\n", formatBytes(int64(avgSpeed)))
 }
 
-func runConnection(ctx context.Context, config Config, monitor *SpeedMonitor, connID int) {
-	// Create HTTP client based on URL scheme
-	var client *http.Client
-
-	if len(config.URL) >= 8 && config.URL[:8] == "https://" {
-		// HTTP3 client
-		roundTripper := &http3.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true, // For testing with self-signed certs
-			},
-		}
-		client = &http.Client{
-			Transport: roundTripper,
-		}
-	} else {
-		// Regular HTTP client
-		client = &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{
-					InsecureSkipVerify: true,
-				},
-			},
-		}
-	}
+func runConnection(ctx context.Context, config Config, client *http.Client, monitor *SpeedMonitor, connID int) {
 
 	if config.Mode == "upload" {
 		// For upload mode, keep the original behavior (multiple requests)
@@ -193,6 +233,16 @@ func runDownloadConnection(ctx context.Context, config Config, client *http.Clie
 	}
 	defer resp.Body.Close()
 
+	// Ensure ctx cancellation unblocks any pending Body.Read by closing the body
+	closed := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = resp.Body.Close()
+		case <-closed:
+		}
+	}()
+
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("Server returned status: %d", resp.StatusCode)
 		return
@@ -214,6 +264,7 @@ func runDownloadConnection(ctx context.Context, config Config, client *http.Clie
 	// Read data from the single HTTP response and distribute to streams
 	go func() {
 		defer close(dataChan)
+		defer close(closed)
 
 		buffer := make([]byte, 64*1024)
 		for {
@@ -332,6 +383,12 @@ func doDownload(ctx context.Context, config Config, client *http.Client, monitor
 		return
 	}
 	defer resp.Body.Close()
+
+	// Ensure ctx cancellation unblocks any pending Body.Read by closing the body
+	go func() {
+		<-ctx.Done()
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("Server returned status: %d", resp.StatusCode)
