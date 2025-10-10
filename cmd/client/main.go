@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -63,13 +62,8 @@ func main() {
 		lastTime:  time.Now(),
 	}
 
-	// Handle Ctrl+C (SIGINT) / SIGTERM (and SIGBREAK on Windows) to cancel gracefully
-	sigs := []os.Signal{os.Interrupt, syscall.SIGTERM}
-	if runtime.GOOS == "windows" {
-		// PowerShell/ConHost may deliver BREAK as well
-		sigs = append(sigs, syscall.SIGBREAK)
-	}
-	sigCtx, stop := signal.NotifyContext(context.Background(), sigs...)
+	// Handle Ctrl+C (SIGINT) / SIGTERM to cancel gracefully
+	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	// Start speed monitoring with time limit AND signal cancellation
