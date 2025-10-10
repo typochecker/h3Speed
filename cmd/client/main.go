@@ -189,125 +189,18 @@ func (sm *SpeedMonitor) printFinalStats() {
 }
 
 func runConnection(ctx context.Context, config Config, client *http.Client, monitor *SpeedMonitor, connID int) {
-
-	if config.Mode == "upload" {
-		// For upload mode, keep the original behavior (multiple requests)
-		var wg sync.WaitGroup
-
-		for i := 0; i < config.Streams; i++ {
-			wg.Add(1)
-			go func(streamID int) {
-				defer wg.Done()
-				runStream(ctx, config, client, monitor, connID, streamID)
-			}(i)
-		}
-
-		wg.Wait()
-	} else {
-		// For download mode, use a single request shared by multiple streams
-		runDownloadConnection(ctx, config, client, monitor, connID)
-	}
-}
-
-func runDownloadConnection(ctx context.Context, config Config, client *http.Client, monitor *SpeedMonitor, connID int) {
-	url := config.URL + "/download"
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		log.Printf("Error creating request: %v", err)
-		return
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return // Context cancelled
-		}
-		log.Printf("Error downloading: %v", err)
-		return
-	}
-	defer resp.Body.Close()
-
-	// Ensure ctx cancellation unblocks any pending Body.Read by closing the body
-	closed := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = resp.Body.Close()
-		case <-closed:
-		}
-	}()
-
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("Server returned status: %d", resp.StatusCode)
-		return
-	}
-
-	// Create a channel to distribute data chunks among streams
-	dataChan := make(chan []byte, config.Streams*2)
-
-	// Start stream workers that process data chunks
+	// Both upload and download modes now use multiple concurrent requests
 	var wg sync.WaitGroup
+
 	for i := 0; i < config.Streams; i++ {
 		wg.Add(1)
 		go func(streamID int) {
 			defer wg.Done()
-			runDownloadStream(ctx, dataChan, monitor, connID, streamID)
+			runStream(ctx, config, client, monitor, connID, streamID)
 		}(i)
 	}
 
-	// Read data from the single HTTP response and distribute to streams
-	go func() {
-		defer close(dataChan)
-		defer close(closed)
-
-		buffer := make([]byte, 64*1024)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				n, err := resp.Body.Read(buffer)
-				if n > 0 {
-					// Make a copy of the data for the channel
-					chunk := make([]byte, n)
-					copy(chunk, buffer[:n])
-
-					select {
-					case dataChan <- chunk:
-					case <-ctx.Done():
-						return
-					}
-				}
-
-				if err == io.EOF {
-					return
-				}
-				if err != nil {
-					if ctx.Err() != nil {
-						return // Context cancelled
-					}
-					log.Printf("Error reading response: %v", err)
-					return
-				}
-			}
-		}
-	}()
-
 	wg.Wait()
-}
-
-func runDownloadStream(ctx context.Context, dataChan <-chan []byte, monitor *SpeedMonitor, connID, streamID int) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case chunk, ok := <-dataChan:
-			if !ok {
-				return // Channel closed
-			}
-			monitor.addBytes(int64(len(chunk)))
-		}
-	}
 }
 
 func runStream(ctx context.Context, config Config, client *http.Client, monitor *SpeedMonitor, connID, streamID int) {

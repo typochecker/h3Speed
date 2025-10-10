@@ -97,17 +97,15 @@ Average speed: 127.9 MB/s
 
 ### Stream Behavior
 
-**Download Mode**: Multiple streams share a single HTTP request/response. This means that increasing the number of streams will NOT increase total throughput - all streams will read from the same data source. This behavior correctly simulates scenarios where you want to test how well an application handles concurrent reads from the same data stream.
-
-**Upload Mode**: Multiple streams create separate HTTP requests. This allows testing upload capacity with concurrent uploads, which can increase total throughput.
+Both **Download Mode** and **Upload Mode** now create separate HTTP requests for each stream. This allows testing network capacity with concurrent streams, which can increase total throughput.
 
 Example:
 ```bash
-# These commands will show similar download speeds
-./bin/h3speed-client -mode=download -streams=1  # ~40 MB/s
-./bin/h3speed-client -mode=download -streams=4  # ~40 MB/s (shared)
+# These commands will show different download speeds with concurrent streams
+./bin/h3speed-client -mode=download -streams=1  # ~45 MB/s
+./bin/h3speed-client -mode=download -streams=4  # ~180 MB/s (concurrent)
 
-# These commands will show different upload speeds  
+# These commands will show different upload speeds with concurrent streams
 ./bin/h3speed-client -mode=upload -streams=1    # ~45 MB/s
 ./bin/h3speed-client -mode=upload -streams=4    # ~180 MB/s (concurrent)
 ```
